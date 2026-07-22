@@ -7,8 +7,6 @@ import aiohttp
 import requests
 import json
 import base64
-import threading
-import time
 import like_pb2
 import uid_generator_pb2
 import visit_count_pb2
@@ -17,48 +15,14 @@ from collections import OrderedDict
 app = Flask(__name__)
 
 VALID_API_KEYS = {"DARK"}
-daily_limit = 20
 used_count = 0
 
-# Global variables for Auto-Refresh system
-GUEST_UID = None
-GUEST_PWD = None
-ACTIVE_TOKEN = None
+# 🔥 यह लिस्ट टेलीग्राम से अपलोड किए गए सभी टोकन्स को 1 सेकंड में सेव कर लेगी 🔥
+ACTIVE_TOKENS = []
 
-# ==========================================
-# GARENA AUTH (AUTO-REFRESH BACKGROUND TASK)
-# ==========================================
-def fetch_new_garena_token(uid, pwd):
-    try:
-        # अभी हम पुरानी फाइल से ही टोकन उठाएंगे
-        tokens = load_tokens("IND")
-        if tokens: return tokens[0]['token']
-        return None
-    except Exception as e:
-        return None
-
-def auto_refresh_loop():
-    global ACTIVE_TOKEN
-    while True:
-        if GUEST_UID and GUEST_PWD:
-            new_token = fetch_new_garena_token(GUEST_UID, GUEST_PWD)
-            if new_token:
-                ACTIVE_TOKEN = new_token
-                print(f"[+] Token Auto-Refreshed for UID: {GUEST_UID}")
-        
-        # 600 Seconds = 10 Minutes
-        time.sleep(600)
-
-# Start the background auto-refresh thread
-threading.Thread(target=auto_refresh_loop, daemon=True).start()
-
-# ==========================================
-# HELPER FUNCTIONS
-# ==========================================
 def load_tokens(region):
-    # If we have a fresh token in RAM, use it first
-    if ACTIVE_TOKEN:
-        return [{"token": ACTIVE_TOKEN}]
+    if ACTIVE_TOKENS:
+        return ACTIVE_TOKENS
     try:
         with open("token_ind.json", "r") as f: return json.load(f)
     except Exception: return None
@@ -107,7 +71,7 @@ async def send_multiple_requests(uid, region, url):
         if not tokens or not encrypted_uid: return None
         
         tasks = []
-        # 🔥 यहाँ 100 की जगह 20 कर दिया गया है ताकि Garena टोकन ब्लॉक न करे 🔥
+        # 20 Requests distributed across ALL available tokens in your JSON!
         for i in range(20):
             token = tokens[i % len(tokens)]["token"]
             tasks.append(send_request(encrypted_uid, token, url))
@@ -169,7 +133,6 @@ def home():
             body { background-color: #0d0d0d; color: #00ffcc; font-family: 'Courier New', Courier, monospace; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; overflow: hidden; }
             .terminal { border: 2px solid #00ffcc; padding: 40px; box-shadow: 0 0 15px #00ffcc; text-align: center; background: rgba(0, 0, 0, 0.8); border-radius: 10px; }
             h1 { font-size: 2.5em; text-transform: uppercase; margin-bottom: 10px; letter-spacing: 2px; }
-            p { font-size: 1.2em; }
             .status { color: #39ff14; font-weight: bold; }
         </style>
     </head>
@@ -177,36 +140,24 @@ def home():
         <div class="terminal">
             <h1>⚡ DARK LIKES BOT ⚡</h1>
             <p>API SYSTEM <span class="status">ONLINE</span></p>
-            <p>AUTO-REFRESH: <span class="status">ACTIVE</span></p>
-            <p>SPAM PROTECTION: <span class="status">ENABLED (20/REQ)</span></p>
+            <p>MULTI-TOKEN UPLOAD: <span class="status">ENABLED</span></p>
         </div>
     </body>
     </html>
     """
     return html_content
 
-@app.route('/set_credentials', methods=['POST'])
-def set_credentials():
-    global GUEST_UID, GUEST_PWD
-    api_key = request.form.get("key")
+@app.route('/upload_tokens', methods=['POST'])
+def upload_tokens():
+    global ACTIVE_TOKENS
+    api_key = request.headers.get("key")
     if api_key not in VALID_API_KEYS: return jsonify({"error": "Access Denied"}), 401
     
-    GUEST_UID = request.form.get("uid")
-    GUEST_PWD = request.form.get("password")
-    
-    if GUEST_UID and GUEST_PWD:
-        return jsonify({"status": "Success", "message": "Credentials updated. 10-Min Auto-Refresh Started."})
-    return jsonify({"error": "UID or Password missing."}), 400
-
-@app.route('/get_active_token', methods=['GET'])
-def get_active_token():
-    api_key = request.args.get("key")
-    if api_key not in VALID_API_KEYS: return jsonify({"error": "Access Denied"}), 401
-    
-    tokens = load_tokens("IND")
-    if tokens:
-        return jsonify({"status": "Success", "token": tokens[0]['token']})
-    return jsonify({"error": "No token available in memory."}), 404
+    data = request.json
+    if isinstance(data, list) and len(data) > 0 and 'token' in data[0]:
+        ACTIVE_TOKENS = data
+        return jsonify({"status": "Success", "message": f"{len(data)} Tokens Loaded Instantly!"})
+    return jsonify({"error": "Invalid JSON format. Must be a list of tokens."}), 400
 
 @app.route('/status', methods=['GET'])
 def check_status():
@@ -218,7 +169,7 @@ def check_status():
     if not tokens: return jsonify({"error": "No tokens found."})
     
     results = []
-    for i, t_data in enumerate(tokens[:5]):
+    for i, t_data in enumerate(tokens[:10]): # Can check up to 10 bots now
         token = t_data.get("token", "")
         uid = decode_jwt_uid(token)
         
@@ -231,11 +182,8 @@ def check_status():
         
         if info and info.AccountInfo and info.AccountInfo.UID:
             results.append({
-                "bot": i+1, 
-                "name": info.AccountInfo.PlayerNickname, 
-                "uid": uid, 
-                "status": "✅ Active", 
-                "level": info.AccountInfo.Levels
+                "bot": i+1, "name": info.AccountInfo.PlayerNickname, 
+                "uid": uid, "status": "✅ Active", "level": info.AccountInfo.Levels
             })
         else:
             results.append({"bot": i+1, "uid": uid, "status": "⚠️ Expired/Blocked", "level": 0})
@@ -255,11 +203,14 @@ def handle_visit():
         tokens = load_tokens(region)
         if not tokens: raise Exception("JSON Error: Token not found.")
         
-        token = tokens[0]['token']
-        encrypted_uid = enc(uid)
-        
-        info = make_request(encrypted_uid, region, token)
-        if info is None: raise Exception("API Error: Token Expired or Request Blocked.")
+        # Loop through tokens until one works
+        info = None
+        for t_data in tokens:
+            encrypted_uid = enc(uid)
+            info = make_request(encrypted_uid, region, t_data['token'])
+            if info and info.AccountInfo.UID: break
+            
+        if info is None: raise Exception("API Error: All Tokens Expired or Blocked.")
         
         result = OrderedDict([
             ("PlayerNickname", info.AccountInfo.PlayerNickname),
@@ -285,17 +236,23 @@ def handle_requests():
         tokens = load_tokens(region)
         if not tokens: raise Exception("JSON Error: Token not found.")
         
-        token = tokens[0]['token']
-        encrypted_uid = enc(uid)
-        
-        before = make_request(encrypted_uid, region, token)
-        if before is None: raise Exception("API Error: Token Expired or Request Blocked.")
+        # Find a working token for 'before' request
+        before = None
+        working_token = None
+        for t_data in tokens:
+            encrypted_uid = enc(uid)
+            before = make_request(encrypted_uid, region, t_data['token'])
+            if before and before.AccountInfo.UID:
+                working_token = t_data['token']
+                break
+                
+        if before is None: raise Exception("API Error: All Tokens Expired or Blocked.")
         before_like = before.AccountInfo.Likes
 
         url = "https://client.ind.freefiremobile.com/LikeProfile"
         asyncio.run(send_multiple_requests(uid, region, url))
 
-        after = make_request(encrypted_uid, region, token)
+        after = make_request(encrypted_uid, region, working_token)
         if after is None: raise Exception("API Error: Failed to fetch data after liking.")
         after_like = after.AccountInfo.Likes
         
@@ -318,3 +275,4 @@ def handle_requests():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
+        
