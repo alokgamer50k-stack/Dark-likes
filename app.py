@@ -174,6 +174,35 @@ def check_status():
             
     return jsonify({"total_tokens": len(tokens), "data": results})
 
+@app.route('/visit', methods=['GET'])
+def handle_visit():
+    api_key = request.args.get("key")
+    if api_key not in VALID_API_KEYS: return jsonify({"error": "Access Denied"}), 401
+
+    uid = request.args.get("uid")
+    region = request.args.get("region", "").upper()
+    if not uid or not region: return jsonify({"error": "UID required"}), 400
+
+    try:
+        tokens = load_tokens(region)
+        if not tokens: raise Exception("JSON Error: Format of token_ind.json is wrong.")
+        
+        token = tokens[0]['token']
+        encrypted_uid = enc(uid)
+        
+        info = make_request(encrypted_uid, region, token)
+        if info is None: raise Exception("API Error: Token Expired or Request Blocked.")
+        
+        result = OrderedDict([
+            ("PlayerNickname", info.AccountInfo.PlayerNickname),
+            ("PlayerLevel", info.AccountInfo.Levels),
+            ("Likes", info.AccountInfo.Likes),
+            ("UID", info.AccountInfo.UID)
+        ])
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/like', methods=['GET'])
 def handle_requests():
     global used_count
@@ -211,7 +240,7 @@ def handle_requests():
             ("LikesafterCommand", after_like),
             ("LikesbeforeCommand", before_like),
             ("PlayerNickname", after.AccountInfo.PlayerNickname),
-            ("PlayerLevel", after.AccountInfo.Levels),  # Level yahan bheja ja raha hai
+            ("PlayerLevel", after.AccountInfo.Levels),
             ("UID", after.AccountInfo.UID),
             ("status", status)
         ])
