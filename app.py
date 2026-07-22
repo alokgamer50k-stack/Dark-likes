@@ -14,7 +14,7 @@ from collections import OrderedDict
 
 app = Flask(__name__)
 
-# API Key
+# API Key for DARK Brand
 VALID_API_KEYS = {"DARK"}
 
 daily_limit = 20
@@ -119,7 +119,7 @@ def make_request(encrypt, region, token):
     except Exception:
         return None
 
-# Custom Full-Screen Interface
+# Clean Dark Terminal UI for Root Page
 @app.route('/', methods=['GET'])
 def home():
     html_content = """
@@ -127,7 +127,7 @@ def home():
     <html lang="en">
     <head>
         <meta charset="UTF-8">
-        <title>DARK RAION FF - API</title>
+        <title>DARK LIKES BOT - API</title>
         <style>
             body { background-color: #0d0d0d; color: #00ffcc; font-family: 'Courier New', Courier, monospace; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; overflow: hidden; }
             .terminal { border: 2px solid #00ffcc; padding: 40px; box-shadow: 0 0 15px #00ffcc; text-align: center; background: rgba(0, 0, 0, 0.8); border-radius: 10px; }
@@ -138,10 +138,9 @@ def home():
     </head>
     <body>
         <div class="terminal">
-            <h1>⚡ DARK RAION FF ⚡</h1>
+            <h1>⚡ DARK LIKES BOT ⚡</h1>
             <p>API SYSTEM <span class="status">ONLINE</span></p>
             <p>VERSION: OB54</p>
-            <p>HOST: SECURE SERVER</p>
         </div>
     </body>
     </html>
@@ -199,4 +198,3 @@ def handle_requests():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
-    
