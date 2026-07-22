@@ -6,27 +6,22 @@ import binascii
 import aiohttp
 import requests
 import json
+import base64
 import like_pb2
 import uid_generator_pb2
 import visit_count_pb2
-from google.protobuf.message import DecodeError
 from collections import OrderedDict
 
 app = Flask(__name__)
 
-# API Key for DARK Brand
 VALID_API_KEYS = {"DARK"}
-
 daily_limit = 20
 used_count = 0
 
 def load_tokens(region):
     try:
-        with open("token_ind.json", "r") as f:
-            tokens = json.load(f)
-        return tokens
-    except Exception:
-        return None
+        with open("token_ind.json", "r") as f: return json.load(f)
+    except Exception: return None
 
 def encrypt_message(plaintext):
     try:
@@ -34,10 +29,8 @@ def encrypt_message(plaintext):
         iv = b'6oyZDr22E3ychjM%'
         cipher = AES.new(key, AES.MODE_CBC, iv)
         padded_message = pad(plaintext, AES.block_size)
-        encrypted_message = cipher.encrypt(padded_message)
-        return binascii.hexlify(encrypted_message).decode('utf-8')
-    except Exception:
-        return None
+        return binascii.hexlify(cipher.encrypt(padded_message)).decode('utf-8')
+    except Exception: return None
 
 def create_protobuf_message(user_id, region):
     try:
@@ -45,8 +38,7 @@ def create_protobuf_message(user_id, region):
         message.uid = int(user_id)
         message.region = region
         return message.SerializeToString()
-    except Exception:
-        return None
+    except Exception: return None
 
 async def send_request(encrypted_uid, token, url):
     try:
@@ -65,8 +57,7 @@ async def send_request(encrypted_uid, token, url):
         async with aiohttp.ClientSession() as session:
             async with session.post(url, data=edata, headers=headers) as response:
                 return await response.text()
-    except Exception:
-        return None
+    except Exception: return None
 
 async def send_multiple_requests(uid, region, url):
     try:
@@ -81,8 +72,7 @@ async def send_multiple_requests(uid, region, url):
             tasks.append(send_request(encrypted_uid, token, url))
         results = await asyncio.gather(*tasks, return_exceptions=True)
         return results
-    except Exception:
-        return None
+    except Exception: return None
 
 def create_protobuf(uid):
     try:
@@ -90,8 +80,7 @@ def create_protobuf(uid):
         message.saturn_ = int(uid)
         message.garena = 1
         return message.SerializeToString()
-    except Exception:
-        return None
+    except Exception: return None
 
 def enc(uid):
     protobuf_data = create_protobuf(uid)
@@ -103,23 +92,27 @@ def make_request(encrypt, region, token):
         edata = bytes.fromhex(encrypt)
         headers = {
             "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 9; ASUS_Z01QD Build/PI)",
-            "Connection": "Keep-Alive",
-            "Accept-Encoding": "gzip",
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/x-www-form-urlencoded",
-            "Expect": "100-continue",
             "X-Unity-Version": "2018.4.11f1",
-            "X-GA": "v1 1",
             "ReleaseVersion": "OB54"
         }
         response = requests.post(url, data=edata, headers=headers, verify=False)
         decoded = visit_count_pb2.Info()
         decoded.ParseFromString(response.content)
         return decoded
-    except Exception:
-        return None
+    except Exception: return None
 
-# Clean Dark Terminal UI for Root Page
+def decode_jwt_uid(token):
+    try:
+        parts = token.split('.')
+        if len(parts) >= 2:
+            padded = parts[1] + '=' * (4 - len(parts[1]) % 4)
+            payload = json.loads(base64.b64decode(padded).decode('utf-8'))
+            return str(payload.get('account_id', ''))
+    except: pass
+    return None
+
 @app.route('/', methods=['GET'])
 def home():
     html_content = """
@@ -147,48 +140,78 @@ def home():
     """
     return html_content
 
+@app.route('/status', methods=['GET'])
+def check_status():
+    api_key = request.args.get("key")
+    if api_key not in VALID_API_KEYS: return jsonify({"error": "Access Denied"}), 401
+    
+    region = request.args.get("region", "IND").upper()
+    tokens = load_tokens(region)
+    if not tokens: return jsonify({"error": "No tokens found. Please check your token_ind.json format."})
+    
+    results = []
+    for i, t_data in enumerate(tokens[:5]):
+        token = t_data.get("token", "")
+        uid = decode_jwt_uid(token)
+        
+        if not uid:
+            results.append({"bot": i+1, "status": "❌ Invalid Token", "level": 0})
+            continue
+            
+        encrypted_uid = enc(uid)
+        info = make_request(encrypted_uid, region, token)
+        
+        if info and info.AccountInfo and info.AccountInfo.UID:
+            results.append({
+                "bot": i+1, 
+                "name": info.AccountInfo.PlayerNickname, 
+                "uid": uid, 
+                "status": "✅ Active", 
+                "level": info.AccountInfo.Levels
+            })
+        else:
+            results.append({"bot": i+1, "uid": uid, "status": "⚠️ Expired/Blocked", "level": 0})
+            
+    return jsonify({"total_tokens": len(tokens), "data": results})
+
 @app.route('/like', methods=['GET'])
 def handle_requests():
     global used_count
-
     api_key = request.args.get("key")
-    if api_key not in VALID_API_KEYS:
-        return jsonify({"error": "Access Denied", "status": 3}), 401
+    if api_key not in VALID_API_KEYS: return jsonify({"error": "Access Denied", "status": 3}), 401
 
     uid = request.args.get("uid")
     region = request.args.get("region", "").upper()
-    if not uid or not region:
-        return jsonify({"error": "UID required"}), 400
+    if not uid or not region: return jsonify({"error": "UID required"}), 400
 
     try:
         tokens = load_tokens(region)
-        if not tokens: raise Exception("Failed to load tokens.")
+        if not tokens: raise Exception("JSON Error: Format of token_ind.json is wrong.")
         
         token = tokens[0]['token']
         encrypted_uid = enc(uid)
         
         before = make_request(encrypted_uid, region, token)
-        if before is None: raise Exception("Failed to get info.")
+        if before is None: raise Exception("API Error: Token Expired or Request Blocked.")
         before_like = before.AccountInfo.Likes
 
         url = "https://client.ind.freefiremobile.com/LikeProfile"
         asyncio.run(send_multiple_requests(uid, region, url))
 
         after = make_request(encrypted_uid, region, token)
-        if after is None: raise Exception("Failed to get info.")
+        if after is None: raise Exception("API Error: Failed to fetch data after liking.")
         after_like = after.AccountInfo.Likes
         
         like_given = after_like - before_like
         status = 1 if like_given > 0 else 2
-
         if status == 1: used_count += 1
-        remaining = max(daily_limit - used_count, 0)
 
         result = OrderedDict([
             ("LikesGivenByAPI", like_given),
             ("LikesafterCommand", after_like),
             ("LikesbeforeCommand", before_like),
             ("PlayerNickname", after.AccountInfo.PlayerNickname),
+            ("PlayerLevel", after.AccountInfo.Levels),  # Level yahan bheja ja raha hai
             ("UID", after.AccountInfo.UID),
             ("status", status)
         ])
@@ -198,4 +221,3 @@ def handle_requests():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
-        
