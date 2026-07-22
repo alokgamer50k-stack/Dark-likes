@@ -7,6 +7,8 @@ import aiohttp
 import requests
 import json
 import base64
+import threading
+import time
 import like_pb2
 import uid_generator_pb2
 import visit_count_pb2
@@ -18,7 +20,45 @@ VALID_API_KEYS = {"DARK"}
 daily_limit = 20
 used_count = 0
 
+# Global variables for Auto-Refresh system
+GUEST_UID = None
+GUEST_PWD = None
+ACTIVE_TOKEN = None
+
+# ==========================================
+# GARENA AUTH (AUTO-REFRESH BACKGROUND TASK)
+# ==========================================
+def fetch_new_garena_token(uid, pwd):
+    try:
+        # अभी हम पुरानी फाइल से ही टोकन उठाएंगे
+        tokens = load_tokens("IND")
+        if tokens: return tokens[0]['token']
+        return None
+    except Exception as e:
+        return None
+
+def auto_refresh_loop():
+    global ACTIVE_TOKEN
+    while True:
+        if GUEST_UID and GUEST_PWD:
+            new_token = fetch_new_garena_token(GUEST_UID, GUEST_PWD)
+            if new_token:
+                ACTIVE_TOKEN = new_token
+                print(f"[+] Token Auto-Refreshed for UID: {GUEST_UID}")
+        
+        # 600 Seconds = 10 Minutes
+        time.sleep(600)
+
+# Start the background auto-refresh thread
+threading.Thread(target=auto_refresh_loop, daemon=True).start()
+
+# ==========================================
+# HELPER FUNCTIONS
+# ==========================================
 def load_tokens(region):
+    # If we have a fresh token in RAM, use it first
+    if ACTIVE_TOKEN:
+        return [{"token": ACTIVE_TOKEN}]
     try:
         with open("token_ind.json", "r") as f: return json.load(f)
     except Exception: return None
@@ -67,7 +107,8 @@ async def send_multiple_requests(uid, region, url):
         if not tokens or not encrypted_uid: return None
         
         tasks = []
-        for i in range(100):
+        # 🔥 यहाँ 100 की जगह 20 कर दिया गया है ताकि Garena टोकन ब्लॉक न करे 🔥
+        for i in range(20):
             token = tokens[i % len(tokens)]["token"]
             tasks.append(send_request(encrypted_uid, token, url))
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -113,6 +154,9 @@ def decode_jwt_uid(token):
     except: pass
     return None
 
+# ==========================================
+# API ENDPOINTS
+# ==========================================
 @app.route('/', methods=['GET'])
 def home():
     html_content = """
@@ -133,12 +177,36 @@ def home():
         <div class="terminal">
             <h1>⚡ DARK LIKES BOT ⚡</h1>
             <p>API SYSTEM <span class="status">ONLINE</span></p>
-            <p>VERSION: OB54</p>
+            <p>AUTO-REFRESH: <span class="status">ACTIVE</span></p>
+            <p>SPAM PROTECTION: <span class="status">ENABLED (20/REQ)</span></p>
         </div>
     </body>
     </html>
     """
     return html_content
+
+@app.route('/set_credentials', methods=['POST'])
+def set_credentials():
+    global GUEST_UID, GUEST_PWD
+    api_key = request.form.get("key")
+    if api_key not in VALID_API_KEYS: return jsonify({"error": "Access Denied"}), 401
+    
+    GUEST_UID = request.form.get("uid")
+    GUEST_PWD = request.form.get("password")
+    
+    if GUEST_UID and GUEST_PWD:
+        return jsonify({"status": "Success", "message": "Credentials updated. 10-Min Auto-Refresh Started."})
+    return jsonify({"error": "UID or Password missing."}), 400
+
+@app.route('/get_active_token', methods=['GET'])
+def get_active_token():
+    api_key = request.args.get("key")
+    if api_key not in VALID_API_KEYS: return jsonify({"error": "Access Denied"}), 401
+    
+    tokens = load_tokens("IND")
+    if tokens:
+        return jsonify({"status": "Success", "token": tokens[0]['token']})
+    return jsonify({"error": "No token available in memory."}), 404
 
 @app.route('/status', methods=['GET'])
 def check_status():
@@ -147,7 +215,7 @@ def check_status():
     
     region = request.args.get("region", "IND").upper()
     tokens = load_tokens(region)
-    if not tokens: return jsonify({"error": "No tokens found. Please check your token_ind.json format."})
+    if not tokens: return jsonify({"error": "No tokens found."})
     
     results = []
     for i, t_data in enumerate(tokens[:5]):
@@ -185,7 +253,7 @@ def handle_visit():
 
     try:
         tokens = load_tokens(region)
-        if not tokens: raise Exception("JSON Error: Format of token_ind.json is wrong.")
+        if not tokens: raise Exception("JSON Error: Token not found.")
         
         token = tokens[0]['token']
         encrypted_uid = enc(uid)
@@ -215,7 +283,7 @@ def handle_requests():
 
     try:
         tokens = load_tokens(region)
-        if not tokens: raise Exception("JSON Error: Format of token_ind.json is wrong.")
+        if not tokens: raise Exception("JSON Error: Token not found.")
         
         token = tokens[0]['token']
         encrypted_uid = enc(uid)
