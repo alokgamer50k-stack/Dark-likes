@@ -15,12 +15,6 @@ from collections import OrderedDict
 app = Flask(__name__)
 VALID_API_KEYS = {"DARK"}
 
-def load_tokens():
-    try:
-        with open("token_ind.json", "r") as f: 
-            return json.load(f)
-    except Exception: return None
-
 def encrypt_message(plaintext):
     try:
         key = b'Yg&tc%DEuh6%Zc^8'
@@ -57,19 +51,16 @@ async def send_request(encrypted_uid, token, url):
                 return await response.text()
     except Exception: return None
 
-async def send_multiple_requests(uid, region, url):
+async def send_multiple_requests(uid, region, url, token):
     try:
         protobuf_message = create_protobuf_message(uid, region)
         encrypted_uid = encrypt_message(protobuf_message)
-        tokens = load_tokens()
-        if not tokens or not encrypted_uid: return None
+        if not token or not encrypted_uid: return None
         
-        # 🔥 THE ZEXXY TRICK: RACE CONDITION (30 Requests instantly) 🔥
+        # 🔥 THE ZEXXY TRICK (30 Requests instantly) 🔥
         tasks = []
-        working_token = tokens[0]["token"] 
-        
         for _ in range(30): 
-            tasks.append(send_request(encrypted_uid, working_token, url))
+            tasks.append(send_request(encrypted_uid, token, url))
             
         return await asyncio.gather(*tasks, return_exceptions=True)
     except Exception: return None
@@ -111,19 +102,16 @@ def decode_jwt_uid(token):
 
 @app.route('/', methods=['GET'])
 def home():
-    return "<h1>⚡ DARK MASTER LIKES API ONLINE ⚡</h1>"
+    return "<h1>⚡ DARK MASTER API ONLINE (AUTO-TOKEN MODE) ⚡</h1>"
 
 @app.route('/status', methods=['GET'])
 def check_status():
     api_key = request.args.get("key")
+    token = request.args.get("token")
     if api_key not in VALID_API_KEYS: return jsonify({"error": "Access Denied"}), 401
+    if not token: return jsonify({"error": "No token provided by Wispbyte."})
     
-    tokens = load_tokens()
-    if not tokens: return jsonify({"error": "No tokens found in token_ind.json."})
-    
-    token = tokens[0].get("token", "")
     uid = decode_jwt_uid(token)
-    
     if not uid: return jsonify({"data": [{"bot": 1, "status": "❌ Invalid Token", "level": 0}]})
         
     encrypted_uid = enc(uid)
@@ -137,15 +125,14 @@ def check_status():
 @app.route('/visit', methods=['GET'])
 def handle_visit():
     api_key = request.args.get("key")
+    token = request.args.get("token")
     if api_key not in VALID_API_KEYS: return jsonify({"error": "Access Denied"}), 401
-    uid = request.args.get("uid")
+    if not token: return jsonify({"error": "No token provided."})
     
+    uid = request.args.get("uid")
     try:
-        tokens = load_tokens()
-        if not tokens: raise Exception("Token not found.")
         encrypted_uid = enc(uid)
-        info = make_request(encrypted_uid, tokens[0]['token'])
-        
+        info = make_request(encrypted_uid, token)
         if info is None or not info.AccountInfo.UID: raise Exception("Token Expired or Blocked.")
         
         result = OrderedDict([("PlayerNickname", info.AccountInfo.PlayerNickname), ("PlayerLevel", info.AccountInfo.Levels), ("Likes", info.AccountInfo.Likes), ("UID", info.AccountInfo.UID)])
@@ -156,26 +143,25 @@ def handle_visit():
 @app.route('/like', methods=['GET'])
 def handle_requests():
     api_key = request.args.get("key")
+    token = request.args.get("token")
     if api_key not in VALID_API_KEYS: return jsonify({"error": "Access Denied"}), 401
+    if not token: return jsonify({"error": "No token provided."})
+    
     uid = request.args.get("uid")
     region = request.args.get("region", "IND").upper()
 
     try:
-        tokens = load_tokens()
-        if not tokens: raise Exception("No tokens found.")
-        
         encrypted_uid = enc(uid)
-        working_token = tokens[0]['token']
-        before = make_request(encrypted_uid, working_token)
+        before = make_request(encrypted_uid, token)
         
         if before is None or not before.AccountInfo.UID: raise Exception("Token Expired or Invalid.")
         before_like = before.AccountInfo.Likes
 
         # रेस कंडीशन फायर (एक साथ 30 लाइक्स)
         url = "https://client.ind.freefiremobile.com/LikeProfile"
-        asyncio.run(send_multiple_requests(uid, region, url))
+        asyncio.run(send_multiple_requests(uid, region, url, token))
 
-        after = make_request(encrypted_uid, working_token)
+        after = make_request(encrypted_uid, token)
         after_like = after.AccountInfo.Likes
         
         like_given = after_like - before_like
@@ -197,3 +183,4 @@ def handle_requests():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
+    
